@@ -11,11 +11,14 @@
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize, char *method);
+// void serve_static(int fd, char *filename, int filesize);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
+void serve_dynamic(int fd, char *filename, char *cgiargs, char *method);
+// void serve_dynamic(int fd, char *filename, char *cgiargs);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg,
                  char *longmsg);
+void sigchild_handler(int sig);
 
 int main(int argc, char **argv) {
   int listenfd, connfd;
@@ -27,6 +30,9 @@ int main(int argc, char **argv) {
   if (argc != 2) {
     fprintf(stderr, "usage: %s <port>\n", argv[0]);
     exit(1);
+  }
+  if (Signal(SIGCHLD, sigchild_handler) == SIG_ERR){
+    unix_error("signal child handler error");
   }
 
   listenfd = Open_listenfd(argv[1]);
@@ -56,7 +62,8 @@ void doit(int fd){
   printf("Request headers:\n");
   printf("%s", buf);
   sscanf(buf, "%s %s %s", method, uri, version);
-  if(strcasecmp(method, "GET")){ //strcasecmp는 대소문자 구분없이 비교
+  // if(strcasecmp(method, "GET")){ strcasecmp는 대소문자 구분없이 비교
+  if(!(strcasecmp(method, "GET") == 0 || strcasecmp(method, "HEAD") == 0)){
     clienterror(fd, method, "501", "Not implemented", "Tiny does not implement this method");
     return;
   }
@@ -76,7 +83,8 @@ void doit(int fd){
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
       return;
     }
-    serve_static(fd, filename, sbuf.st_size);
+    // serve_static(fd, filename, sbuf.st_size);
+    serve_static(fd, filename, sbuf.st_size, method);
   }
   else{/*Serve dynamic content*/
     if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)){
@@ -85,7 +93,8 @@ void doit(int fd){
       clienterror(fd, filename, "403", "Forbidden", "Tiny couldn't read the file");
       return;
     }
-    serve_dynamic(fd, filename, cgiargs);
+    // serve_dynamic(fd, filename, cgiargs);
+    serve_dynamic(fd, filename, cgiargs, method);
   }
 }
 
@@ -144,7 +153,7 @@ int parse_uri(char *uri, char *filename, char *cgiargs){
   }
 }
 
-void serve_static(int fd, char *filename, int filesize){
+void serve_static(int fd, char *filename, int filesize, char *method){
   int srcfd;
   char *srcp, filetype[MAXLINE], buf[MAXBUF];
   /* Send response headers to client */
@@ -157,20 +166,30 @@ void serve_static(int fd, char *filename, int filesize){
   Rio_writen(fd, buf, strlen(buf));
   printf("Response headers:\n");
   printf("%s", buf);
-
+  if(strcasecmp(method, "HEAD") == 0)
+    return;
   /* Send response body to client */
   srcfd = Open(filename, O_RDONLY, 0);
-  srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
-  /*파일이나 디바이스를 응용 프로그램의 주소 공간 메모리에 대응시킨다.
-    1인자 => 시작 포인터 주소 (아래의 예제 참조)
-    2인자 => 파일이나 주소공간의 메모리 크기
-    3인자 => PROT 설정 (읽기, 쓰기, 접근권한, 실행)
-    4인자 => flags는 다른 프로세스와 공유할지 안할지를 결정한다.
-    5인자 => fd는 쓰거나 읽기용으로 열린 fd값을 넣어준다.
-    6인자 => offset은 0으로 하던지 알아서 조절한다.*/
+  // srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+  // /*파일이나 디바이스를 응용 프로그램의 주소 공간 메모리에 대응시킨다.
+  //   1인자 => 시작 포인터 주소 (아래의 예제 참조)
+  //   2인자 => 파일이나 주소공간의 메모리 크기
+  //   3인자 => PROT 설정 (읽기, 쓰기, 접근권한, 실행)
+  //   4인자 => flags는 다른 프로세스와 공유할지 안할지를 결정한다.
+  //   5인자 => fd는 쓰거나 읽기용으로 열린 fd값을 넣어준다.
+  //   6인자 => offset은 0으로 하던지 알아서 조절한다.*/
+
+  /*11.9
+    Modify Tiny so that when it serves static content, 
+    it copies the requested file to the connected descriptor
+    using malloc, rio_readn, and rio_writen, instead of mmap and rio_writen.
+  */
+  srcp = (char*)Malloc(filesize);
+  Rio_readn(srcfd, srcp, filesize);
   Close(srcfd);
   Rio_writen(fd, srcp, filesize);
-  Munmap(srcp, filesize);
+  // Munmap(srcp, filesize);
+  free(srcp);
 }
 
 /*
@@ -185,17 +204,16 @@ void get_filetype(char *filename, char *filetype){
     strcpy(filetype, "image/png");
   }else if(strstr(filename, ".jpg")){
     strcpy(filetype, "image/jpg");
+  /* 11.7 mpg video files */
+  }else if(strstr(filename, ".mp4")){
+    strcpy(filetype, "video/mp4");
   }else{
     strcpy(filetype, "image/plain");
-  // /* 11.7 mpg video files */
-  // }else{
-  //   strcpy(filetype, "video/MPG");
-  // }
-}
+  }
 }
 
 
-void serve_dynamic(int fd, char *filename, char *cgiargs){
+void serve_dynamic(int fd, char *filename, char *cgiargs, char *method){
   char buf[MAXLINE], *emptylist[] = { NULL };
   /* Return first part of HTTP response */
   sprintf(buf, "HTTP/1.0 200 OK\r\n");
@@ -205,8 +223,18 @@ void serve_dynamic(int fd, char *filename, char *cgiargs){
       if (Fork() == 0) { /* Child */
           /* Real server would set all CGI vars here */
           setenv("QUERY_STRING", cgiargs, 1);
+          setenv("REQUEST_METHOD", method, 1);
           Dup2(fd, STDOUT_FILENO);         /* Redirect stdout to client */
           Execve(filename, emptylist, environ); /* Run CGI program */
   }
-      Wait(NULL); /* Parent waits for and reaps child */
+  // wait(NULL);
+}
+
+void sigchild_handler(int sig){
+  int old_errno = errno;
+  int status;
+  pid_t pid;
+  while((pid = waitpid(-1, &status, WNOHANG)) > 0){}
+  errno = old_errno;
+
 }
