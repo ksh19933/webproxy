@@ -258,7 +258,7 @@ int main(int argc, char **argv){
 }
 /* thread function */
 void *thread(void *vargp){
-    int connfd = (int)vargp;
+    int connfd = (int) vargp;
     Pthread_detach(pthread_self());
     //pthread_self: 현재 쓰레드의 식별자 리턴
     //pthread_detach: 특정 쓰레드를 분리시킨다.
@@ -302,7 +302,6 @@ void doit(int connfd){
     parse_uri(uri, hostname, path, &port);
     /* build the http header which will send to the end server */
     build_http_header(endserver_http_header, hostname, path, port, &client_rio);
-
     // end server에 연결
     end_serverfd = connect_endServer(hostname, port, endserver_http_header);
     if(end_serverfd < 0){
@@ -345,9 +344,9 @@ void build_http_header(char *http_header, char *hostname, char *path, int port, 
             strcpy(host_hdr, buf);
             continue;
         }
-        if(!strncasecmp(buf,connection_key,strlen(connection_key))
-            &&!strncasecmp(buf,proxy_connection_key,strlen(proxy_connection_key))
-            &&!strncasecmp(buf,user_agent_key,strlen(user_agent_key)))
+        if(strncasecmp(buf,connection_key,strlen(connection_key))
+            &&strncasecmp(buf,proxy_connection_key,strlen(proxy_connection_key))
+            &&strncasecmp(buf,user_agent_key,strlen(user_agent_key)))
         {
             /*
             buf = "Connection" or "User-Agent" or "Proxy-Connection";
@@ -358,7 +357,6 @@ void build_http_header(char *http_header, char *hostname, char *path, int port, 
     if(strlen(host_hdr) == 0){
         sprintf(host_hdr, host_hdr_format, hostname);
     }
-
     sprintf(http_header, "%s%s%s%s%s%s%s", 
             request_hdr, 
             host_hdr,
@@ -494,6 +492,7 @@ int cache_eviction(){
         if(cache.cacheobjs[i].LRU < min){//if not empty choose the min LRU
             minindex = i;
             readerAfter(i);
+            min = cache.cacheobjs[i].LRU;
             continue;
         }
         readerAfter(i);
